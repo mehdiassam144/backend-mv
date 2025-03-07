@@ -1,70 +1,81 @@
-Name: Linting and Testing
+name: Deploying
 
 on:
   Push:
     Branches:
       - master
-  pull_request:
 
 Jobs:
-  linting:
-    Name: Run Linters
+  release:
+    Name: release
     runs-on: ubuntu-latest
 
     Steps:
-      - Name: Checkout code
-        Uses: actions/checkout@v4
-                  
-      - Uses: pnpm/action-setup@v2
-        with:
-          version: 8
+    - Name: Checkout code
+      Uses: actions/checkout@v4
 
-      - Name: Install Node.js
-        Uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'pnpm'
-      
-      - Name: install packages
-        run: pnpm i
-      
-      - Name: Run ESLint
-        run: pnpm run lint
+    - Name: Get version
+      Id: package-version
+      Uses: martinbeentjes/npm-get-version-action@main
 
-  Building:
-    Name: Build project
+    - Name: Create Release
+      Uses: actions/create-release@v1
+      env:
+        token: ${{ secrets.TOKEN }}
+      with:
+        tag_name: ${{ steps.package-version.outputs.current-version }}
+        release_name: Backend v${{ steps.package-version.outputs.current-version }}
+        draft: false
+        prerelease: false
+
+  Registry:
+    Name: Push to registry
     runs-on: ubuntu-latest
+    permissions:
+      Contents: Read
+      Packages: write
+      id-token: write
+
+    env:
+      Registry: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
 
     Steps:
-      - Name: Checkout code
+      - Name: Checkout repository
         Uses: actions/checkout@v4
-                  
-      - Uses: pnpm/action-setup@v2
-        with:
-          version: 8
 
-      - Name: Install Node.js
-        Uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          Cache: 'pnpm'
-      
-      - Name: install packages
-        run: pnpm install
-
-      - Name: Build project
-        run: pnpm build
-
-  docker:
-    Name: Build docker
-    runs-on: ubuntu-latest
-
-    Steps:
-      - Name: Checkout code
-        Uses: actions/checkout@v4
-      
-      - Name: Set up Docker Buildx
+      - Name: Setup Docker buildx
         Uses: docker/setup-buildx-action@v3
 
-      - Name: build
+      - Name: Get version
+        Id: package-version
+        Uses: martinbeentjes/npm-get-version-action@main
+
+      - Name: Log into registry ${{ env.REGISTRY }}
+        Uses: docker/login-action@v2
+        with:
+          Registry: ${{ env.REGISTRY }}
+          Username: ${{ github.actor }}
+          Password: ${{ secrets.TOKEN }}
+
+      - Name: Extract Docker metadata
+        Id: Meta
+        Uses: docker/metadata-action@v4
+        with:
+          Images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          Tags: |
+            type=semver,pattern={{version}},value=v${{ steps.package-version.outputs.current-version }}
+
+      - Name: Build and push Docker image
+        Id: build-and-push
         Uses: docker/build-push-action@v5
+        with:
+          Push: true
+          Platforms: linux/amd64,linux/arm64
+          Context: .
+          Labels: ${{ steps.meta.outputs.labels }}
+          Tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
